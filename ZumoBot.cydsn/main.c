@@ -53,7 +53,7 @@
  * @details  ** Enable global interrupt since Zumo library uses interrupts. **<br>&nbsp;&nbsp;&nbsp;CyGlobalIntEnable;<br>
 */
 
-#if 1
+#if 0
 // Hello World!
 void zmain(void)
 {
@@ -61,7 +61,7 @@ void zmain(void)
 
     while(true)
     {
-        vTaskDelay(100); // sleep (in an infinite loop)
+       vTaskDelay(100); // sleep (in an infinite loop)
     }
  }   
 #endif
@@ -281,32 +281,111 @@ void zmain(void)
 #endif
 
 
-#if 0
-//reflectance
+#if 1
+
+int linepos(struct sensors_ dig)
+{
+    if (dig.L1 == 0 && dig.L2 == 0 && dig.L3 == 0 && dig.R1 == 0 && dig.R2 == 0 && dig.R3 == 0) // none
+        return (2);
+    else if (dig.L1 == 1 && dig.L2 == 1 && dig.L3 == 1 && dig.R1 == 1 && dig.R2 == 1 && dig.R3 == 1) // all
+        return (3);
+    else if (dig.L1 == 1 && dig.L2 == 0 && dig.L3 == 0 && dig.R1 == 1 && dig.R2 == 0 && dig.R3 == 0) // mid
+        return (0);
+    else if (dig.L3 == 1 || dig.L2 == 1) // turn left
+        return (-1);
+    else if (dig.R2 == 1 || dig.R3 == 1) // turn right
+        return (1);
+    else
+        return (2);
+}
+//reflectance >> line follower
 void zmain(void)
 {
     struct sensors_ ref;
     struct sensors_ dig;
+    
+    int lines = 0;
+    TickType_t start = 0;
+    TickType_t stop = 0;
+    bool on_line = false;
+    bool miss = false;
 
     reflectance_start();
-    reflectance_set_threshold(9000, 9000, 11000, 11000, 9000, 9000); // set center sensor threshold to 11000 and others to 9000
+    IR_Start();
+    IR_flush();
+    RTC_Start();
+    
+    reflectance_set_threshold(15000, 15000, 17000, 17000, 15000, 15000); // original sensor threshold mid 11000 and others to 9000
     
 
     while(true)
     {
+        motor_start();
+        vTaskDelay(200);
         // read raw sensor values
         reflectance_read(&ref);
         // print out each period of reflectance sensors
-        printf("%5d %5d %5d %5d %5d %5d\r\n", ref.L3, ref.L2, ref.L1, ref.R1, ref.R2, ref.R3);       
+        // printf("%5d %5d %5d %5d %5d %5d\r\n", ref.L3, ref.L2, ref.L1, ref.R1, ref.R2, ref.R3);       
         
         // read digital values that are based on threshold. 0 = white, 1 = black
         // when blackness value is over threshold the sensors reads 1, otherwise 0
         reflectance_digital(&dig); 
         //print out 0 or 1 according to results of reflectance period
-        printf("%5d %5d %5d %5d %5d %5d \r\n", dig.L3, dig.L2, dig.L1, dig.R1, dig.R2, dig.R3);        
-        
-        vTaskDelay(200);
+        //printf("%5d %5d %5d %5d %5d %5d \r\n", dig.L3, dig.L2, dig.L1, dig.R1, dig.R2, dig.R3);
+        int pos = linepos(dig);
+        if (pos == 3)
+        {
+            //printf("pos is 3\n");
+            on_line = true;
+            if (lines == 0) // finding the start line and stopping to wait signal
+            {
+                lines = 1;
+                motor_forward(0,0);
+                send_mqtt("Zumo08/ready", "line");
+                IR_wait();
+                motor_forward(50, 50);
+                start = xTaskGetTickCount();
+                print_mqtt("Zumo08/start", "%d", start);
+            }
+            else if (lines >= 3) // last line where the bot is supposed to stop ON the line
+            {
+                motor_forward(0,0);
+                stop = xTaskGetTickCount();
+                print_mqtt("Zumo08/stop", "%d", stop);
+                print_mqtt("Zumo08/time", "%d", stop - start);
+                motor_stop();
+                break;
+            }
+            else
+                motor_forward(50, 50);
+        }
+        else
+        {
+            if (dig.L1 == 0 && dig.R1 == 0 && lines > 0 && miss == false)
+            {
+                print_mqtt("Zumo/miss", "%d", xTaskGetTickCount());
+                miss = true;
+            }
+            if (dig.L1 == 1 && dig.R1 == 1 && miss == true)
+            {
+                print_mqtt("Zumo/line", "%d", xTaskGetTickCount());
+                miss = false;
+            }
+            if(pos == 2 || pos == 0) // none or mid = forward
+                motor_forward(50,50);
+            else if (pos == -1) // left = turn left
+                motor_turn(3, 20, 10);
+            else if (pos == 1)
+                motor_turn(20, 3, 10);
+            if (on_line == true)
+            {
+                lines++;
+                on_line = false;
+            }
+        }
     }
+    while (true)
+        vTaskDelay(200);
 }   
 #endif
 
